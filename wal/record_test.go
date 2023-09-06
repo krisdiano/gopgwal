@@ -2,6 +2,7 @@ package wal
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"testing"
 
@@ -47,4 +48,55 @@ func TestRecord(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestRecordHeader(t *testing.T) {
+	file := "./testdata/000000010000000300000001"
+	f, err := os.Open(file)
+	assert.NoError(t, err)
+	defer f.Close()
+
+	longHeader, err := ReadXLogLongPageHeader(f)
+	assert.NoError(t, err)
+	assert.NotNil(t, longHeader)
+
+	err = SkipRemainData(f, &longHeader.Std)
+	assert.NoError(t, err)
+
+	record, rpos, err := ReadXLogRecord(f)
+	assert.NoError(t, err)
+	id, err := ReadReferenceId(f)
+	assert.NoError(t, err)
+	assert.LessOrEqual(t, id, XLR_MAX_BLOCK_ID)
+	bheader, err := ReadXLogRecordBlockHeader(f, id)
+	assert.NoError(t, err)
+	// assert.Equal(t, true, bheader.HasImage())
+	// iheader, err := ReadXLogRecordBlockImageHeader(f)
+	// assert.NoError(t, err)
+	// assert.Equal(t, true, iheader.HasCompressed())
+	// assert.Equal(t, true, iheader.HasHole())
+	// _, err = ReadXLogRecordBlockCompressHeader(f)
+	// assert.NoError(t, err)
+	assert.Equal(t, true, bheader.HasFileNode())
+	rfnode, err := ReadRelFileNode(f)
+	assert.NoError(t, err)
+	assert.Equal(t, "1663/16384/16397", fmt.Sprintf("%d/%d/%d", rfnode.SpcNode, rfnode.DbNode, rfnode.RelNode))
+	blknum, err := ReadBlockNumber(f)
+	assert.NoError(t, err)
+	assert.Equal(t, BlockNumber(371658), blknum)
+	id, err = ReadReferenceId(f)
+	assert.NoError(t, err)
+	// assert.Equal(t, XLR_BLOCK_ID_ORIGIN, id)
+	// _, err = ReadRepOriginDummy(f, id)
+	// assert.NoError(t, err)
+	// id, err = ReadReferenceId(f)
+	// assert.NoError(t, err)
+	assert.Equal(t, XLR_BLOCK_ID_DATA_SHORT, id)
+	dheader, err := ReadXLogRecordDataHeaderShort(f, id)
+	assert.NoError(t, err)
+
+	dataLen := bheader.DataLength + uint16(dheader.DataLength)
+	pos, err := f.Seek(0, io.SeekCurrent)
+	assert.NoError(t, err)
+	assert.Equal(t, rpos+int64(record.XlTotlen), pos+int64(dataLen))
 }
