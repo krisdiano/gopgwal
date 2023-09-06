@@ -295,3 +295,8 @@ func SkipRecord(seeker io.Seeker, record *XLogRecord) error {
 	}
 	return Align(seeker)
 }
+
+func Skip(seeker io.Seeker, cnt int64) error {
+	_, err := seeker.Seek(cnt, io.SeekCurrent)
+	return err
+}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -99,4 +100,17 @@ func TestRecordHeader(t *testing.T) {
 	pos, err := f.Seek(0, io.SeekCurrent)
 	assert.NoError(t, err)
 	assert.Equal(t, rpos+int64(record.XlTotlen), pos+int64(dataLen))
+
+	err = Skip(f, int64(bheader.DataLength))
+	assert.NoError(t, err)
+	offsetBytes := make([]byte, 2)
+	_, err = io.ReadFull(f, offsetBytes)
+	assert.NoError(t, err)
+	offset := *(*uint16)(unsafe.Pointer(&offsetBytes[0]))
+	assert.Equal(t, uint16(63), offset)
+	flagBytes := make([]byte, 2)
+	_, err = io.ReadFull(f, flagBytes)
+	assert.NoError(t, err)
+	flag := *(*uint8)(unsafe.Pointer(&flagBytes[0]))
+	assert.Equal(t, uint8(0), flag)
 }
