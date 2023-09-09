@@ -32,18 +32,16 @@ func (lsn XLogRecPtr) String() string {
 	return fmt.Sprintf("%x/%02x%06x", uint32(high), uint32(logSeq), uint32(offset))
 }
 
-func WalFilename(tli TimeLineID, lsn XLogRecPtr) string {
-	high, lowTmp := lsn&0xffffffff00000000>>32, lsn&0xffffffff
-	low := lowTmp / 1024 * 1024 * 16
-	return fmt.Sprintf("%08x%08x%08x", tli, high, low)
-}
-
 type XLogPageHeaderData struct {
 	XlpMagic    uint16
 	XlpInfo     uint16
 	XlpTli      TimeLineID
 	XlpPagedddr XLogRecPtr
 	XlpRemLen   uint32
+}
+
+func SizeofXLogPageHeaderData() int64 {
+	return 24
 }
 
 func (x *XLogPageHeaderData) String() string {
@@ -75,7 +73,7 @@ type XLogPageHeader = *XLogPageHeaderData
 func ReadXLogPageHeader(reader io.Reader) (XLogPageHeader, error) {
 	var (
 		header  XLogPageHeaderData
-		content = make([]byte, unsafe.Sizeof(header))
+		content = make([]byte, SizeofXLogPageHeaderData())
 	)
 
 	_, err := io.ReadFull(reader, content)
@@ -92,6 +90,10 @@ type XLogLongPageHeaderData struct {
 	XlpSysid      uint64
 	XlpSegSize    uint32
 	XlpXLogBlcksz uint32
+}
+
+func SizeofXLogLongPageHeaderData() int64 {
+	return 40
 }
 
 func (x *XLogLongPageHeaderData) String() string {
@@ -117,7 +119,7 @@ type XLogLongPageHeader = *XLogLongPageHeaderData
 func ReadXLogLongPageHeader(reader io.Reader) (XLogLongPageHeader, error) {
 	var (
 		longHeader XLogLongPageHeaderData
-		content    = make([]byte, unsafe.Sizeof(longHeader))
+		content    = make([]byte, SizeofXLogLongPageHeaderData())
 	)
 
 	_, err := io.ReadFull(reader, content)
@@ -127,15 +129,4 @@ func ReadXLogLongPageHeader(reader io.Reader) (XLogLongPageHeader, error) {
 	ptr := (XLogLongPageHeader)(unsafe.Pointer(&content[0]))
 	longHeader = *ptr
 	return &longHeader, nil
-}
-
-func SkipRemainData(seeker io.Seeker, header XLogPageHeader) error {
-	if header.XlpRemLen <= 0 {
-		fmt.Printf("remlen:0\n")
-		return nil
-	}
-	fmt.Printf("remlen:%d\n", header.XlpRemLen)
-
-	_, err := seeker.Seek(int64(header.XlpRemLen), 1)
-	return err
 }

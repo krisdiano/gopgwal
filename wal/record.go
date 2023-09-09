@@ -49,6 +49,10 @@ type XLogRecord struct {
 	XlCrc    PgCrc32c
 }
 
+func SizeofXLogRecord() int64 {
+	return 24
+}
+
 func ReadReferenceId(reader io.Reader) (uint8, error) {
 	id := make([]byte, 1)
 	_, err := io.ReadFull(reader, id)
@@ -78,6 +82,14 @@ type XLogRecordBlockHeader struct {
 	/* BlockNumber follows */
 }
 
+func SizeofXLogRecordBlockHeader() int64 {
+	return 4
+}
+
+func (h *XLogRecordBlockHeader) HasData() bool {
+	return h.ForkFlags&BKPBLOCK_FLAG_MASK&BKPBLOCK_HAS_DATA == BKPBLOCK_HAS_DATA
+}
+
 func (h *XLogRecordBlockHeader) HasImage() bool {
 	return h.ForkFlags&BKPBLOCK_FLAG_MASK&BKPBLOCK_HAS_IMAGE == BKPBLOCK_HAS_IMAGE
 }
@@ -88,8 +100,7 @@ func (h *XLogRecordBlockHeader) HasFileNode() bool {
 
 func ReadXLogRecordBlockHeader(reader io.Reader, id uint8) (*XLogRecordBlockHeader, error) {
 	var header XLogRecordBlockHeader
-	size := unsafe.Sizeof(header)
-	buf := make([]byte, size)
+	buf := make([]byte, SizeofXLogRecordBlockHeader())
 	buf[0] = id
 	_, err := io.ReadFull(reader, buf[1:])
 	if err != nil {
@@ -103,12 +114,14 @@ func ReadXLogRecordBlockHeader(reader io.Reader, id uint8) (*XLogRecordBlockHead
 const (
 	/* Information stored in bimg_info */
 	BKPIMAGE_HAS_HOLE = 0x01 /* page image has "hole" */
-	BKPIMAGE_APPLY    = 0x02 /* page image should be restored
-	 * during replay */
-	/* compression methods supported */
-	BKPIMAGE_COMPRESS_PGLZ = 0x04
-	BKPIMAGE_COMPRESS_LZ4  = 0x08
-	BKPIMAGE_COMPRESS_ZSTD = 0x10
+	// BKPIMAGE_APPLY    = 0x02 /* page image should be restored
+	//  * during replay */
+	// /* compression methods supported */
+	// BKPIMAGE_COMPRESS_PGLZ = 0x04
+	// BKPIMAGE_COMPRESS_LZ4  = 0x08
+	// BKPIMAGE_COMPRESS_ZSTD = 0x10
+
+	BKPIMAGE_IS_COMPRESSED = 0x02
 )
 
 type XLogRecordBlockImageHeader struct {
@@ -122,18 +135,25 @@ type XLogRecordBlockImageHeader struct {
 	 */
 }
 
+func SizeofXLogRecordBlockImageHeader() int64 {
+	return 5
+}
+
 func (h *XLogRecordBlockImageHeader) HasHole() bool {
 	return h.BimgInfo&BKPIMAGE_HAS_HOLE == BKPIMAGE_HAS_HOLE
 }
 
+// func (h *XLogRecordBlockImageHeader) HasCompressed() bool {
+// 	return (h.BimgInfo & (BKPIMAGE_COMPRESS_PGLZ | BKPIMAGE_COMPRESS_LZ4 | BKPIMAGE_COMPRESS_ZSTD)) != 0
+// }
+
 func (h *XLogRecordBlockImageHeader) HasCompressed() bool {
-	return (h.BimgInfo & (BKPIMAGE_COMPRESS_PGLZ | BKPIMAGE_COMPRESS_LZ4 | BKPIMAGE_COMPRESS_ZSTD)) != 0
+	return h.BimgInfo&BKPIMAGE_IS_COMPRESSED == BKPIMAGE_IS_COMPRESSED
 }
 
 func ReadXLogRecordBlockImageHeader(reader io.Reader) (*XLogRecordBlockImageHeader, error) {
 	var header XLogRecordBlockImageHeader
-	size := unsafe.Sizeof(header)
-	buf := make([]byte, size)
+	buf := make([]byte, SizeofXLogRecordBlockImageHeader())
 	_, err := io.ReadFull(reader, buf)
 	if err != nil {
 		return nil, err
@@ -147,10 +167,13 @@ type XLogRecordBlockCompressHeader struct {
 	HoleLength uint16 /* number of bytes in "hole" */
 }
 
+func SizeofXLogRecordBlockCompressHeader() int64 {
+	return 2
+}
+
 func ReadXLogRecordBlockCompressHeader(reader io.Reader) (*XLogRecordBlockCompressHeader, error) {
 	var header XLogRecordBlockCompressHeader
-	size := unsafe.Sizeof(header)
-	buf := make([]byte, size)
+	buf := make([]byte, SizeofXLogRecordBlockCompressHeader())
 	_, err := io.ReadFull(reader, buf)
 	if err != nil {
 		return nil, err
@@ -167,10 +190,13 @@ type RelFileNode struct {
 	RelNode Oid /* relation */
 }
 
+func SizeofRelFileNode() int64 {
+	return 12
+}
+
 func ReadRelFileNode(reader io.Reader) (*RelFileNode, error) {
 	var rfn RelFileNode
-	size := unsafe.Sizeof(rfn)
-	buf := make([]byte, size)
+	buf := make([]byte, SizeofRelFileNode())
 	_, err := io.ReadFull(reader, buf)
 	if err != nil {
 		return nil, err
@@ -182,10 +208,13 @@ func ReadRelFileNode(reader io.Reader) (*RelFileNode, error) {
 
 type BlockNumber uint32
 
+func SizeofBlockNumber() int64 {
+	return 4
+}
+
 func ReadBlockNumber(reader io.Reader) (BlockNumber, error) {
 	var num BlockNumber
-	size := unsafe.Sizeof(num)
-	buf := make([]byte, size)
+	buf := make([]byte, SizeofBlockNumber())
 	_, err := io.ReadFull(reader, buf)
 	if err != nil {
 		return 0, err
@@ -201,10 +230,13 @@ type RepOriginDummy struct {
 	RepOriginId RepOriginId
 }
 
+func SizeofRepOriginDummy() int64 {
+	return 3
+}
+
 func ReadRepOriginDummy(reader io.Reader, id uint8) (*RepOriginDummy, error) {
 	var header RepOriginDummy
-	size := unsafe.Sizeof(header)
-	buf := make([]byte, size)
+	buf := make([]byte, SizeofRepOriginDummy())
 	buf[0] = id
 	_, err := io.ReadFull(reader, buf[1:])
 	if err != nil {
@@ -220,10 +252,13 @@ type XLogRecordDataHeaderShort struct {
 	DataLength uint8 /* number of payload bytes */
 }
 
+func SizeofXLogRecordDataHeaderShort() int64 {
+	return 2
+}
+
 func ReadXLogRecordDataHeaderShort(reader io.Reader, id uint8) (*XLogRecordDataHeaderShort, error) {
 	var header XLogRecordDataHeaderShort
-	size := unsafe.Sizeof(header)
-	buf := make([]byte, size)
+	buf := make([]byte, SizeofXLogRecordDataHeaderShort())
 	buf[0] = id
 	_, err := io.ReadFull(reader, buf[1:])
 	if err != nil {
@@ -239,25 +274,18 @@ type XLogRecordDataHeaderLong struct {
 	/* followed by uint32 data_length, unaligned */
 }
 
+func SizeofXLogRecordDataHeaderLong() int64 {
+	return 1
+}
+
 func ReadXLogRecordDataHeaderLong(reader io.Reader, id uint8) (*XLogRecordDataHeaderLong, error) {
-	var header XLogRecordDataHeaderLong
-	size := unsafe.Sizeof(header)
-	buf := make([]byte, size)
-	buf[0] = id
-	_, err := io.ReadFull(reader, buf[1:])
-	if err != nil {
-		return nil, err
-	}
-	ptr := (*XLogRecordDataHeaderLong)(unsafe.Pointer(&buf[0]))
-	header = *ptr
-	return &header, nil
+	return &XLogRecordDataHeaderLong{id}, nil
 }
 
 // ReadMainDataLength should only be called when id equals XLR_BLOCK_ID_DATA_LONG
 func ReadMainDataLength(reader io.Reader) (uint32, error) {
 	var length uint32
-	size := unsafe.Sizeof(length)
-	buf := make([]byte, size)
+	buf := make([]byte, 4)
 	_, err := io.ReadFull(reader, buf)
 	if err != nil {
 		return 0, err
@@ -267,36 +295,17 @@ func ReadMainDataLength(reader io.Reader) (uint32, error) {
 	return length, nil
 }
 
-func ReadXLogRecord(reader io.ReadSeeker) (*XLogRecord, int64, error) {
+func ReadXLogRecord(reader io.Reader) (*XLogRecord, error) {
 	var (
 		record  XLogRecord
 		content = make([]byte, unsafe.Sizeof(record))
 	)
 
-	offset, err := reader.Seek(0, io.SeekCurrent)
+	_, err := io.ReadFull(reader, content)
 	if err != nil {
-		return nil, 0, err
-	}
-
-	_, err = io.ReadFull(reader, content)
-	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	ptr := (*XLogRecord)(unsafe.Pointer(&content[0]))
 	record = *ptr
-	return &record, offset, nil
-}
-
-func SkipRecord(seeker io.Seeker, record *XLogRecord) error {
-	remainLen := record.XlTotlen - uint32(unsafe.Sizeof(*record))
-	_, err := seeker.Seek(int64(remainLen), io.SeekCurrent)
-	if err != nil {
-		return err
-	}
-	return Align(seeker)
-}
-
-func Skip(seeker io.Seeker, cnt int64) error {
-	_, err := seeker.Seek(cnt, io.SeekCurrent)
-	return err
+	return &record, nil
 }
