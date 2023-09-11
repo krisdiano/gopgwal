@@ -1,10 +1,7 @@
 package wal
 
 import (
-	"fmt"
 	"io"
-	"strconv"
-	"strings"
 	"unsafe"
 )
 
@@ -21,17 +18,6 @@ const (
 	XLP_ALL_FLAGS = 0x000F
 )
 
-type TimeLineID uint32
-type XLogRecPtr uint64
-
-func (lsn XLogRecPtr) String() string {
-	high := lsn & 0xffffffff00000000 >> 32
-	tmp := lsn & 0x00000000ffffffff
-	logSeq := tmp & 0xff000000 >> 24
-	offset := tmp & 0x00ffffff
-	return fmt.Sprintf("%x/%02x%06x", uint32(high), uint32(logSeq), uint32(offset))
-}
-
 type XLogPageHeaderData struct {
 	XlpMagic    uint16
 	XlpInfo     uint16
@@ -40,35 +26,11 @@ type XLogPageHeaderData struct {
 	XlpRemLen   uint32
 }
 
+type XLogPageHeader = *XLogPageHeaderData
+
 func SizeofXLogPageHeaderData() int64 {
 	return 24
 }
-
-func (x *XLogPageHeaderData) String() string {
-	var s strings.Builder
-	s.WriteString("magic")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(uint64(x.XlpMagic), 16))
-	s.WriteByte('\n')
-	s.WriteString("info")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(uint64(x.XlpInfo), 16))
-	s.WriteByte('\n')
-	s.WriteString("tli")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(uint64(x.XlpTli), 16))
-	s.WriteByte('\n')
-	s.WriteString("pageaddr")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(uint64(x.XlpPagedddr), 16))
-	s.WriteByte('\n')
-	s.WriteString("rem_len")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(uint64(x.XlpRemLen), 16))
-	return s.String()
-}
-
-type XLogPageHeader = *XLogPageHeaderData
 
 func ReadXLogPageHeader(reader io.Reader) (XLogPageHeader, error) {
 	var (
@@ -92,29 +54,11 @@ type XLogLongPageHeaderData struct {
 	XlpXLogBlcksz uint32
 }
 
+type XLogLongPageHeader = *XLogLongPageHeaderData
+
 func SizeofXLogLongPageHeaderData() int64 {
 	return 40
 }
-
-func (x *XLogLongPageHeaderData) String() string {
-	var s strings.Builder
-	s.WriteString(x.Std.String())
-	s.WriteByte('\n')
-	s.WriteString("sysid")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(x.XlpSysid, 16))
-	s.WriteByte('\n')
-	s.WriteString("seg_size")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(uint64(x.XlpSegSize), 16))
-	s.WriteByte('\n')
-	s.WriteString("tli")
-	s.WriteByte('=')
-	s.WriteString(strconv.FormatUint(uint64(x.XlpXLogBlcksz), 16))
-	return s.String()
-}
-
-type XLogLongPageHeader = *XLogLongPageHeaderData
 
 func ReadXLogLongPageHeader(reader io.Reader) (XLogLongPageHeader, error) {
 	var (
