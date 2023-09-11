@@ -81,7 +81,7 @@ func TestPageHeader(t *testing.T) {
 func TestXLogRecord(t *testing.T) {
 	reader, err := NewXLogReader(8, md.segmentSize, md.blockSize, md.startLSN, bytes.NewReader(md.data))
 	assert.NoError(t, err)
-	_, err = reader.FindFirstRecord(reader.LSN())
+	_, err = reader.FindNextRecordWithPageLSN()
 	assert.NoError(t, err)
 
 	var lastSucceedLSN XLogRecPtr
@@ -91,7 +91,7 @@ func TestXLogRecord(t *testing.T) {
 			break
 		}
 		lastSucceedLSN = record.LSN
-		_, err = reader.FindNextRecord()
+		_, err = reader.FindNextRecordWithTailLSN()
 		if err != nil {
 			break
 		}

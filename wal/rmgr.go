@@ -2,7 +2,7 @@ package wal
 
 import "fmt"
 
-type RmgrId = uint8
+type RmgrId uint8
 
 var name = map[RmgrId]string{
 	RM_XLOG_ID:       "XLOG",

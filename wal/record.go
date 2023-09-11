@@ -1,3 +1,7 @@
+// package wal provides many low level functions to read records
+// and page headers. XLogReader is the best way in most cases for
+// users for its easy api. Users must know the wal page layout,
+// If they use these low level function.
 package wal
 
 import (
@@ -27,18 +31,6 @@ const (
 	XLR_CHECK_CONSISTENCY = 0x02
 )
 
-const (
-	XLR_MAX_BLOCK_ID uint8 = 32
-
-	XLR_BLOCK_ID_DATA_SHORT   uint8 = 255
-	XLR_BLOCK_ID_DATA_LONG    uint8 = 254
-	XLR_BLOCK_ID_ORIGIN       uint8 = 253
-	XLR_BLOCK_ID_TOPLEVEL_XID uint8 = 252
-)
-
-type TransactionId uint32
-type PgCrc32c uint32
-
 type XLogRecord struct {
 	XlTotlen uint32
 	XlXid    TransactionId
@@ -52,6 +44,30 @@ type XLogRecord struct {
 func SizeofXLogRecord() int64 {
 	return 24
 }
+
+func ReadXLogRecord(reader io.Reader) (*XLogRecord, error) {
+	var (
+		record  XLogRecord
+		content = make([]byte, unsafe.Sizeof(record))
+	)
+
+	_, err := io.ReadFull(reader, content)
+	if err != nil {
+		return nil, err
+	}
+	ptr := (*XLogRecord)(unsafe.Pointer(&content[0]))
+	record = *ptr
+	return &record, nil
+}
+
+const (
+	XLR_MAX_BLOCK_ID uint8 = 32
+
+	XLR_BLOCK_ID_DATA_SHORT   uint8 = 255
+	XLR_BLOCK_ID_DATA_LONG    uint8 = 254
+	XLR_BLOCK_ID_ORIGIN       uint8 = 253
+	XLR_BLOCK_ID_TOPLEVEL_XID uint8 = 252
+)
 
 func ReadReferenceId(reader io.Reader) (uint8, error) {
 	id := make([]byte, 1)
@@ -183,7 +199,6 @@ func ReadXLogRecordBlockCompressHeader(reader io.Reader) (*XLogRecordBlockCompre
 	return &header, nil
 }
 
-type Oid uint32
 type RelFileNode struct {
 	SpcNode Oid /* tablespace */
 	DbNode  Oid /* database */
@@ -293,19 +308,4 @@ func ReadMainDataLength(reader io.Reader) (uint32, error) {
 	ptr := (*uint32)(unsafe.Pointer(&buf[0]))
 	length = *ptr
 	return length, nil
-}
-
-func ReadXLogRecord(reader io.Reader) (*XLogRecord, error) {
-	var (
-		record  XLogRecord
-		content = make([]byte, unsafe.Sizeof(record))
-	)
-
-	_, err := io.ReadFull(reader, content)
-	if err != nil {
-		return nil, err
-	}
-	ptr := (*XLogRecord)(unsafe.Pointer(&content[0]))
-	record = *ptr
-	return &record, nil
 }
