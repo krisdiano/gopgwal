@@ -81,20 +81,19 @@ func TestPageHeader(t *testing.T) {
 func TestXLogRecord(t *testing.T) {
 	reader, err := NewXLogReader(8, md.segmentSize, md.blockSize, md.startLSN, bytes.NewReader(md.data))
 	assert.NoError(t, err)
-	_, err = reader.findNextFromPageHeader()
-	assert.NoError(t, err)
 
 	var lastSucceedLSN XLogRecPtr
 	for {
+		err := reader.BeginRead()
+		if err != nil {
+			break
+		}
+
 		record, err := reader.ReadRecord()
 		if err != nil {
 			break
 		}
 		lastSucceedLSN = record.LSN
-		_, err = reader.findNextRecordFromRecordTailer()
-		if err != nil {
-			break
-		}
 	}
 	assert.Equal(t, lastSucceedLSN, XLogRecPtr(0x0C18F508))
 }
