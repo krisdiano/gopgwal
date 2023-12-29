@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -64,7 +65,7 @@ func TestLongPageHeader(t *testing.T) {
 	assert.EqualValues(t, md.blockSize, longHeader.XlpXLogBlcksz)
 	assert.EqualValues(t, true, longHeader.Std.XlpInfo&XLP_ALL_FLAGS&XLP_LONG_HEADER != 0)
 	assert.EqualValues(t, 1, longHeader.Std.XlpTli)
-	assert.EqualValues(t, md.startLSN, longHeader.Std.XlpPagedddr)
+	assert.EqualValues(t, md.startLSN, longHeader.Std.XlpPageAddr)
 }
 
 func TestPageHeader(t *testing.T) {
@@ -75,25 +76,41 @@ func TestPageHeader(t *testing.T) {
 	assert.NoError(t, err)
 	assert.EqualValues(t, true, header.XlpInfo&XLP_ALL_FLAGS&XLP_LONG_HEADER == 0)
 	assert.EqualValues(t, 1, header.XlpTli)
-	assert.EqualValues(t, md.startLSN+XLogRecPtr(md.blockSize), header.XlpPagedddr)
+	assert.EqualValues(t, md.startLSN+XLogRecPtr(md.blockSize), header.XlpPageAddr)
 }
 
 func TestXLogRecord(t *testing.T) {
-	reader, err := NewXLogReader(8, md.segmentSize, md.blockSize, md.startLSN, bytes.NewReader(md.data))
+	reader, err := NewXLogReader("./testdata/000000010000000000000003", 8)
 	assert.NoError(t, err)
+	assert.NotNil(t, reader)
 
 	var lastSucceedLSN XLogRecPtr
 	for {
-		err := reader.BeginRead()
-		if err != nil {
-			break
-		}
-
 		record, err := reader.ReadRecord()
 		if err != nil {
+			fmt.Println(err)
 			break
 		}
+		// t.Log(record.LSN, record.Hdr.XlTotlen)
 		lastSucceedLSN = record.LSN
 	}
-	assert.Equal(t, lastSucceedLSN, XLogRecPtr(0x0C18F508))
+	assert.Equal(t, XLogRecPtr(0x0C18F508), lastSucceedLSN)
+}
+
+func TestXLogSwitch(t *testing.T) {
+	reader, err := NewXLogReader("./testdata/000000020000000000000005", 8)
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	var lastSucceedLSN XLogRecPtr
+	for {
+		record, err := reader.ReadRecord()
+		if err != nil {
+			fmt.Println(err)
+			break
+		}
+		// t.Log(record.LSN, record.Hdr.XlTotlen)
+		lastSucceedLSN = record.LSN
+	}
+	assert.Equal(t, XLogRecPtr(0x14DC2390), lastSucceedLSN)
 }
