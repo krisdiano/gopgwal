@@ -1,216 +1,187 @@
 package wal
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
+	"os"
 )
 
 // XLogReader need a startpoint which is a beginning of page or a valid XLogRecPtr
 type XLogReader struct {
-	alignment   uint8
+	alignment uint8
+
 	segmentSize uint32
 	blockSize   uint32
-	reader      *WalBufReader
+
+	read   uint32
+	cur    XLogRecPtr
+	reader *BufFile
 }
 
-func NewXLogReader(align uint8, segmentSize uint32, blockSize uint32, lsn XLogRecPtr, reader io.Reader) (*XLogReader, error) {
-	if align < 1 {
-		return nil, fmt.Errorf("invalid alignment")
-	}
-	if reader == nil {
-		return nil, fmt.Errorf("nil reader")
-	}
-	if blockSize == 0 || segmentSize == 0 || blockSize&1024 != 0 || segmentSize%blockSize != 0 {
-		return nil, fmt.Errorf("invalid size")
-	}
-	if blockSize > segmentSize {
-		return nil, fmt.Errorf("block size greater than segment size")
-	}
-	return &XLogReader{
-		alignment:   align,
-		segmentSize: segmentSize,
-		blockSize:   blockSize,
-		reader:      NewWalBufReader(lsn, bufio.NewReaderSize(reader, 1024*1024*64)),
-	}, nil
-}
-
-func (r *XLogReader) LSN() XLogRecPtr {
-	return r.reader.Cur()
-}
-
-func (r *XLogReader) BeginRead() (err error) {
-	lsn := r.LSN()
-	if r.isPageHeaderLSN(lsn) {
-		_, err = r.findNextFromPageHeader()
-	} else {
-		_, err = r.findNextRecordFromRecordTailer()
-	}
-	return err
-}
-
-func (r *XLogReader) ReadRecord() (*RawRecord, error) {
-	lsn := r.LSN()
-	hdr, err := ReadXLogRecord(r.reader)
+func NewXLogReader(path string, align uint8) (*XLogReader, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = r.readPageHeader()
-	if err != nil && err != errNotPageLSN {
+	hdr, err := ReadXLogLongPageHeader(f)
+	if err != nil {
 		return nil, err
+	}
+	if !IsValidXLogPageHeader(hdr) {
+		return nil, fmt.Errorf("invalid segment file %s", path)
+	}
+
+	cur := hdr.Std.XlpPageAddr + XLogRecPtr(SizeofXLogLongPageHeaderData())
+	// reader := bufio.NewReaderSize(f, int(hdr.XlpSegSize))
+	reader := &BufFile{f}
+
+	if hdr.Std.XlpInfo&XLP_FIRST_IS_CONTRECORD != 0 {
+		if rDataLen := int(hdr.Std.XlpRemLen); rDataLen > 0 {
+			_, err = reader.Discard(rDataLen)
+			if err != nil {
+				return nil, err
+			}
+			cur += XLogRecPtr(rDataLen)
+		}
+	}
+
+	ret := &XLogReader{
+		alignment:   align,
+		segmentSize: hdr.XlpSegSize,
+		blockSize:   hdr.XlpXLogBlcksz,
+		cur:         cur,
+		reader:      reader,
+	}
+	_, err = ret.align()
+	if err != nil {
+		return nil, err
+	}
+	ret.read = uint32(ret.cur - hdr.Std.XlpPageAddr)
+	return ret, nil
+}
+
+func (r *XLogReader) isPageHeaderLSN() (page bool, seg bool) {
+	return r.cur%XLogRecPtr(r.blockSize) == 0, r.cur%XLogRecPtr(r.segmentSize) == 0
+}
+
+func (r *XLogReader) remainBlkSize() uint32 {
+	if a, _ := r.isPageHeaderLSN(); a {
+		return r.blockSize
+	}
+	return r.blockSize - uint32(r.cur)%r.blockSize
+}
+
+func (r *XLogReader) remainSegSize() uint32 {
+	if _, b := r.isPageHeaderLSN(); b {
+		return r.segmentSize
+	}
+	return r.segmentSize - uint32(r.cur)%r.segmentSize
+}
+
+// currrent lsn must start be a record hdr or page header which has no cont record.
+func (r *XLogReader) readN(size uint32) (lsn XLogRecPtr, _ []byte, err error) {
+	if size == 0 {
+		return 0, nil, errors.New("size must greater than 0")
+	}
+	if r.cur%XLogRecPtr(r.alignment) != 0 {
+		return 0, nil, errors.New("lsn must be at page header or record header")
 	}
 
 	var (
-		data   bytes.Buffer
-		total  = hdr.XlTotlen - uint32(SizeofXLogRecord())
-		remain = r.remainBlockSize()
+		dis  int    = 0
+		ret         = make([]byte, size)
+		read uint32 = 0
 	)
-	if remain >= total {
-		_, err = io.CopyN(&data, r.reader, int64(total))
+	for read < size {
+		isPageHdr, isLongPageHdr := r.isPageHeaderLSN()
+		switch {
+		case isLongPageHdr:
+			dis = int(SizeofXLogLongPageHeaderData())
+		case isPageHdr:
+			dis = int(SizeofXLogPageHeaderData())
+		}
+
+		if dis > 0 {
+			_, err = r.reader.Discard(dis)
+			if err != nil {
+				return 0, nil, err
+			}
+			r.cur += XLogRecPtr(dis)
+			r.read += uint32(dis)
+			dis = 0
+		}
+
+		if read == 0 {
+			lsn = r.cur
+		}
+
+		free := r.remainBlkSize()
+		if (size - read) <= free {
+			_, err := r.reader.Read(ret[read:])
+			if err != nil {
+				return 0, nil, err
+			}
+
+			r.cur += XLogRecPtr(size - read)
+			r.read += uint32(size - read)
+			return lsn, ret, nil
+		}
+		n, err := r.reader.Read(ret[read : read+free])
+		if err != nil && uint32(n) != free {
+			return 0, nil, err
+		}
+		read += free
+		r.cur += XLogRecPtr(free)
+		r.read += free
+	}
+	return 0, nil, errors.New("should not be here")
+}
+
+func (r *XLogReader) align() (XLogRecPtr, error) {
+	offset := uint8(r.cur % XLogRecPtr(r.alignment))
+	if offset == 0 {
+		return r.cur, nil
+	}
+
+	step := r.alignment - offset
+	_, err := r.reader.Discard(int(step))
+	if err != nil {
+		return 0, err
+	}
+	r.cur += XLogRecPtr(step)
+	r.read += uint32(step)
+	return r.cur, nil
+}
+
+func (r *XLogReader) ReadRecord() (*RawRecord, error) {
+	_, err := r.align()
+	if err != nil {
+		return nil, err
+	}
+
+	lsn, rawhdr, err := r.readN(uint32(SizeofXLogRecord()))
+	if err != nil {
+		return nil, err
+	}
+	hdr, err := ReadXLogRecord(bytes.NewReader(rawhdr))
+	if err != nil {
+		return nil, err
+	}
+
+	if hdr.XlRmid == RM_XLOG_ID && hdr.XlInfo&(XLR_RMGR_INFO_MASK) == 0x40 {
+		rDataLen := r.remainSegSize()
+		_, err = r.reader.Discard(int(rDataLen))
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		if remain > 0 {
-			_, err = io.CopyN(&data, r.reader, int64(remain))
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		for data.Len() < int(total) {
-			header, err := r.readPageHeader()
-			if err != nil {
-				return nil, err
-			}
-			remain = r.remainDataLen(header)
-			_, err = io.CopyN(&data, r.reader, int64(remain))
-			if err != nil {
-				return nil, err
-			}
-		}
+		return &RawRecord{LSN: lsn, Hdr: hdr}, nil
 	}
 
-	return &RawRecord{LSN: lsn, Hdr: hdr, data: data.Bytes()}, nil
-}
-
-func (r *XLogReader) findNextFromPageHeader() (XLogRecPtr, error) {
-	header, err := r.readPageHeader()
-	if err != nil {
-		return 0, err
-	}
-
-	length := r.remainDataLen(header)
-	if length == 0 {
-		return r.LSN(), nil
-	}
-	size := r.remainBlockSize()
-	if length < size {
-		cur, isNewBlock, err := r.alignN(int32(length))
-		if err != nil {
-			return 0, err
-		}
-		if isNewBlock {
-			return r.findNextFromPageHeader()
-		}
-		if size = r.remainBlockSize(); size >= uint32(SizeofXLogRecord()) {
-			return cur, nil
-		}
-		cur, _, err = r.alignN(int32(size))
-		if err != nil {
-			return 0, err
-		}
-		return r.findNextFromPageHeader()
-	}
-	_, _, err = r.alignN(int32(size))
-	if err != nil {
-		return 0, err
-	}
-	return r.findNextFromPageHeader()
-}
-
-func (r *XLogReader) findNextRecordFromRecordTailer() (XLogRecPtr, error) {
-	cur, isNewBlock, err := r.align()
-	if err != nil {
-		return 0, err
-	}
-	if isNewBlock {
-		return r.findNextFromPageHeader()
-	}
-	remain := r.remainBlockSize()
-	if remain >= uint32(SizeofXLogRecord()) {
-		return cur, nil
-	}
-	cur, _, err = r.alignN(int32(remain))
-	if err != nil {
-		return 0, err
-	}
-	return r.findNextFromPageHeader()
-}
-
-var errNotPageLSN = errors.New("not page lsn")
-
-func (r *XLogReader) readPageHeader() (XLogPageHeader, error) {
-	isStd := r.isPageHeaderLSN(r.LSN())
-	if !isStd {
-		return nil, errNotPageLSN
-	}
-
-	std, err := ReadXLogPageHeader(r.reader)
+	_, rawdata, err := r.readN(hdr.XlTotlen - uint32(SizeofXLogRecord()))
 	if err != nil {
 		return nil, err
 	}
-	if std.XlpInfo&XLP_ALL_FLAGS&XLP_LONG_HEADER == 0 {
-		return std, nil
-	}
-	_, err = r.reader.Discard(int32(SizeofXLogLongPageHeaderData() - SizeofXLogPageHeaderData()))
-	if err != nil {
-		return nil, err
-	}
-	return std, nil
-}
-
-func (r *XLogReader) align() (XLogRecPtr, bool, error) {
-	b := r.LSN() % XLogRecPtr(r.alignment)
-	if b != 0 {
-		delta := int32(r.alignment) - int32(b)
-		_, err := r.reader.Discard(delta)
-		if err != nil {
-			return 0, false, err
-		}
-	}
-	cur := r.LSN()
-	return cur, r.isPageHeaderLSN(cur), nil
-}
-
-func (r *XLogReader) alignN(n int32) (XLogRecPtr, bool, error) {
-	a, b := n/int32(r.alignment), n%int32(r.alignment)
-	if b != 0 {
-		n = a + int32(r.alignment)
-	}
-	_, err := r.reader.Discard(n)
-	if err != nil {
-		return 0, false, err
-	}
-	cur := r.LSN()
-	return cur, r.isPageHeaderLSN(cur), nil
-}
-
-func (r *XLogReader) remainBlockSize() uint32 {
-	return r.blockSize - uint32(r.LSN())%r.blockSize
-}
-
-func (r *XLogReader) isPageHeaderLSN(lsn XLogRecPtr) bool {
-	return lsn%XLogRecPtr(r.blockSize) == 0
-}
-
-func (r *XLogReader) remainDataLen(header XLogPageHeader) uint32 {
-	hasRemainData := header.XlpInfo&XLP_ALL_FLAGS&XLP_FIRST_IS_CONTRECORD == XLP_FIRST_IS_CONTRECORD
-	if !hasRemainData {
-		return 0
-	}
-	return header.XlpRemLen
+	return &RawRecord{LSN: lsn, Hdr: hdr, data: rawdata}, nil
 }

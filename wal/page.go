@@ -6,6 +6,8 @@ import (
 )
 
 const (
+	XLOG_PAGE_MAGIC = 0xD101
+
 	/* When record crosses page boundary, set this flag in new page's header */
 	XLP_FIRST_IS_CONTRECORD = 0x0001
 	/* This flag indicates a "long" page header */
@@ -22,7 +24,7 @@ type XLogPageHeaderData struct {
 	XlpMagic    uint16
 	XlpInfo     uint16
 	XlpTli      TimeLineID
-	XlpPagedddr XLogRecPtr
+	XlpPageAddr XLogRecPtr
 	XlpRemLen   uint32
 }
 
@@ -45,6 +47,10 @@ func ReadXLogPageHeader(reader io.Reader) (XLogPageHeader, error) {
 	ptr := (XLogPageHeader)(unsafe.Pointer(&content[0]))
 	header = *ptr
 	return &header, nil
+}
+
+func IsValidXLogPageHeader(ptr XLogLongPageHeader) bool {
+	return ptr.Std.XlpMagic == XLOG_PAGE_MAGIC
 }
 
 type XLogLongPageHeaderData struct {
